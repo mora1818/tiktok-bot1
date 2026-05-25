@@ -10,7 +10,7 @@ import tempfile
 import re
 import requests
 
-BOT_TOKEN = "8863554950:AAEdzKNpGoqYMkwUSyKJ-l38MAjj1UHbny0"
+BOT_TOKEN = "8863554950:AAG-xCKnYs0duvP_b0suc66luPQdvvi0kiM"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
