@@ -4,10 +4,10 @@
 """
 
 import telebot
+import yt_dlp
 import os
 import tempfile
 import re
-import requests
 
 BOT_TOKEN = "8863554950:AAG-xCKnYs0duvP_b0suc66luPQdvvi0kiM"
 
@@ -17,95 +17,45 @@ def is_tiktok_url(url: str) -> bool:
     pattern = r'(https?://)?(www\.)?(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)/.+'
     return bool(re.match(pattern, url.strip()))
 
-def download_via_snaptik(url: str) -> str | None:
-    """تحميل عبر snaptik API"""
-    try:
-        api = "https://snaptik.app/abc2.php"
-        r = requests.post(api, data={"url": url}, timeout=20)
-        data = r.json()
-        video_url = data.get("data", {}).get("download_url") or data.get("url")
-        if video_url:
-            tmp_dir = tempfile.mkdtemp()
-            file_path = os.path.join(tmp_dir, "video.mp4")
-            vr = requests.get(video_url, timeout=30, stream=True)
-            with open(file_path, "wb") as f:
-                for chunk in vr.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            if os.path.getsize(file_path) > 0:
-                return file_path
-    except Exception as e:
-        print(f"snaptik خطأ: {e}")
-    return None
-
-def download_via_ssstik(url: str) -> str | None:
-    """تحميل عبر ssstik"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://ssstik.io/",
-        }
-        r = requests.post(
-            "https://ssstik.io/abc?url=dl",
-            data={"id": url, "locale": "en", "tt": ""},
-            headers=headers,
-            timeout=20
-        )
-        # استخراج رابط التحميل من HTML
-        match = re.search(r'href="(https://[^"]+\.mp4[^"]*)"', r.text)
-        if match:
-            video_url = match.group(1)
-            tmp_dir = tempfile.mkdtemp()
-            file_path = os.path.join(tmp_dir, "video.mp4")
-            vr = requests.get(video_url, headers=headers, timeout=30, stream=True)
-            with open(file_path, "wb") as f:
-                for chunk in vr.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            if os.path.getsize(file_path) > 0:
-                return file_path
-    except Exception as e:
-        print(f"ssstik خطأ: {e}")
-    return None
-
-def download_via_musicaldown(url: str) -> str | None:
-    """تحميل عبر musicaldown"""
-    try:
-        session = requests.Session()
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://musicaldown.com/"}
-        # الحصول على token
-        page = session.get("https://musicaldown.com/en", headers=headers, timeout=15)
-        token_match = re.search(r'name="([a-z]+)"\s+value="([^"]+)"', page.text)
-        if not token_match:
-            return None
-        token_name = token_match.group(1)
-        token_value = token_match.group(2)
-        # إرسال الطلب
-        r = session.post(
-            "https://musicaldown.com/download",
-            data={token_name: token_value, "link": url, "submit": ""},
-            headers=headers,
-            timeout=20
-        )
-        match = re.search(r'href="(https://[^"]+\.mp4[^"]*)"', r.text)
-        if match:
-            video_url = match.group(1)
-            tmp_dir = tempfile.mkdtemp()
-            file_path = os.path.join(tmp_dir, "video.mp4")
-            vr = session.get(video_url, headers=headers, timeout=30, stream=True)
-            with open(file_path, "wb") as f:
-                for chunk in vr.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            if os.path.getsize(file_path) > 0:
-                return file_path
-    except Exception as e:
-        print(f"musicaldown خطأ: {e}")
-    return None
-
 def download_tiktok(url: str) -> str | None:
-    """يحاول عدة مواقع للتحميل"""
-    for func in [download_via_ssstik, download_via_musicaldown, download_via_snaptik]:
-        result = func(url)
-        if result:
-            return result
+    tmp_dir = tempfile.mkdtemp()
+
+    ydl_opts = {
+        'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            'Referer': 'https://www.tiktok.com/',
+        },
+        'extractor_args': {
+            'tiktok': {
+                'app_name': 'trill',
+                'app_version': '34.1.2',
+                'manifest_app_version': '2023401020',
+            }
+        },
+        'cookiefile': None,
+        'geo_bypass': True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            # تأكد من وجود الملف
+            if not os.path.exists(filename):
+                for f in os.listdir(tmp_dir):
+                    full = os.path.join(tmp_dir, f)
+                    if os.path.getsize(full) > 0:
+                        return full
+            if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                return filename
+    except Exception as e:
+        print(f"yt-dlp خطأ: {e}")
+
     return None
 
 
