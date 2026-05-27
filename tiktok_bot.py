@@ -9,7 +9,7 @@ import os
 import tempfile
 import re
 
-BOT_TOKEN = "8863554950:AAG-xCKnYs0duvP_b0suc66luPQdvvi0kiM"
+BOT_TOKEN = "8863554950:AAGwwGbfBeIOorvhB5ntJ7rluMclFzSBSJ0"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
