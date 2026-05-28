@@ -14,8 +14,6 @@ BOT_TOKEN = "8863554950:AAGwwGbfBeIOorvhB5ntJ7rluMclFzSBSJ0"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ── التعرف على المواقع ─────────────────────────────────────
-
 SUPPORTED_SITES = {
     'tiktok':    r'(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)',
     'instagram': r'(instagram\.com|instagr\.am)',
@@ -31,7 +29,7 @@ def detect_site(url: str) -> str | None:
             return site
     return None
 
-# ── تحميل TikTok عبر tikwm.com ────────────────────────────
+# ── TikTok عبر tikwm.com ──────────────────────────────────
 
 def download_tiktok(url: str) -> str | None:
     try:
@@ -59,17 +57,76 @@ def download_tiktok(url: str) -> str | None:
         print(f"TikTok خطأ: {e}")
     return None
 
-# ── تحميل بقية المواقع عبر yt-dlp ────────────────────────
+# ── Instagram عبر API مجاني ───────────────────────────────
+
+def download_instagram(url: str) -> str | None:
+    try:
+        # استخراج shortcode من الرابط
+        match = re.search(r'/(p|reel|tv)/([A-Za-z0-9_-]+)', url)
+        if not match:
+            return None
+        shortcode = match.group(2)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "X-IG-App-ID": "936619743392459",
+        }
+
+        # محاولة 1: graphql
+        api = f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis"
+        r = requests.get(api, headers=headers, timeout=15)
+        data = r.json()
+
+        video_url = None
+        try:
+            media = data["graphql"]["shortcode_media"]
+            if media.get("is_video"):
+                video_url = media["video_url"]
+            elif media.get("edge_sidecar_to_children"):
+                for edge in media["edge_sidecar_to_children"]["edges"]:
+                    if edge["node"].get("is_video"):
+                        video_url = edge["node"]["video_url"]
+                        break
+        except Exception:
+            pass
+
+        # محاولة 2: oembed
+        if not video_url:
+            oembed = requests.get(
+                f"https://www.instagram.com/oembed/?url={url}",
+                headers=headers, timeout=15
+            )
+            # yt-dlp كاحتياطي
+            return download_ytdlp(url)
+
+        if video_url:
+            tmp_dir = tempfile.mkdtemp()
+            file_path = os.path.join(tmp_dir, "video.mp4")
+            vr = requests.get(video_url, headers=headers, timeout=60, stream=True)
+            with open(file_path, "wb") as f:
+                for chunk in vr.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            if os.path.getsize(file_path) > 0:
+                return file_path
+
+    except Exception as e:
+        print(f"Instagram خطأ: {e}")
+
+    # احتياطي: yt-dlp
+    return download_ytdlp(url)
+
+# ── بقية المواقع عبر yt-dlp ───────────────────────────────
 
 def download_ytdlp(url: str) -> str | None:
     tmp_dir = tempfile.mkdtemp()
     ydl_opts = {
         'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
+        'format': 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
+        'merge_output_format': 'mp4',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
         },
@@ -89,13 +146,15 @@ def download_ytdlp(url: str) -> str | None:
         print(f"yt-dlp خطأ: {e}")
     return None
 
-# ── الدالة الرئيسية للتحميل ───────────────────────────────
+# ── الدالة الرئيسية ───────────────────────────────────────
 
 def download(url: str, site: str) -> str | None:
     if site == 'tiktok':
         result = download_tiktok(url)
         if result:
             return result
+    if site == 'instagram':
+        return download_instagram(url)
     return download_ytdlp(url)
 
 
@@ -105,7 +164,7 @@ def download(url: str, site: str) -> str | None:
 def send_welcome(message):
     text = (
         "👋 أهلاً! أنا بوت تحميل الفيديوهات\n\n"
-        "📌 أرسل لي رابط من أي موقع وسأحمّله لك:\n\n"
+        "📌 أرسل لي رابط من أي موقع:\n\n"
         "✅ TikTok\n"
         "✅ Instagram\n"
         "✅ X (Twitter)\n"
@@ -125,8 +184,7 @@ def handle_message(message):
     if not site:
         bot.reply_to(
             message,
-            "❌ الرابط غير مدعوم!\n\n"
-            "المواقع المدعومة:\n"
+            "❌ الرابط غير مدعوم!\n\nالمواقع المدعومة:\n"
             "• TikTok\n• Instagram\n• X (Twitter)\n• YouTube\n• Facebook\n• Snapchat"
         )
         return
@@ -135,7 +193,7 @@ def handle_message(message):
         'tiktok': '🎵', 'instagram': '📸', 'twitter': '🐦',
         'youtube': '▶️', 'facebook': '📘', 'snapchat': '👻'
     }
-    wait_msg = bot.reply_to(message, f"⏳ جاري تحميل المقطع من {icons.get(site,'')} انتظر...")
+    wait_msg = bot.reply_to(message, f"⏳ جاري التحميل من {icons.get(site,'')} انتظر...")
 
     file_path = download(url, site)
 
@@ -143,7 +201,7 @@ def handle_message(message):
         file_size = os.path.getsize(file_path)
         if file_size > 50 * 1024 * 1024:
             bot.edit_message_text(
-                "❌ حجم المقطع أكبر من 50MB، تيلغرام لا يدعم إرساله.",
+                "❌ حجم المقطع أكبر من 50MB.",
                 chat_id=message.chat.id,
                 message_id=wait_msg.message_id
             )
