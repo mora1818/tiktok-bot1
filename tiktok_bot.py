@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-بوت تيلغرام لتحميل مقاطع TikTok بدون علامة مائية
+بوت تيلغرام لتحميل مقاطع من TikTok, Instagram, X, YouTube, Facebook
 """
 
 import telebot
+import yt_dlp
 import os
 import tempfile
 import re
@@ -13,62 +14,105 @@ BOT_TOKEN = "8863554950:AAGwwGbfBeIOorvhB5ntJ7rluMclFzSBSJ0"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def is_tiktok_url(url: str) -> bool:
-    pattern = r'(https?://)?(www\.)?(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)/.+'
-    return bool(re.match(pattern, url.strip()))
+# ── التعرف على المواقع ─────────────────────────────────────
+
+SUPPORTED_SITES = {
+    'tiktok':    r'(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)',
+    'instagram': r'(instagram\.com|instagr\.am)',
+    'twitter':   r'(twitter\.com|x\.com|t\.co)',
+    'youtube':   r'(youtube\.com|youtu\.be)',
+    'facebook':  r'(facebook\.com|fb\.com|fb\.watch)',
+    'snapchat':  r'(snapchat\.com)',
+}
+
+def detect_site(url: str) -> str | None:
+    for site, pattern in SUPPORTED_SITES.items():
+        if re.search(pattern, url):
+            return site
+    return None
+
+# ── تحميل TikTok عبر tikwm.com ────────────────────────────
 
 def download_tiktok(url: str) -> str | None:
     try:
-        # جلب معلومات الفيديو
-        api_url = f"https://tikwm.com/api/?url={url}&hd=1"
-        r = requests.get(api_url, timeout=20, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://tikwm.com/"
-        })
+        r = requests.get(
+            f"https://tikwm.com/api/?url={url}&hd=1",
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://tikwm.com/"}
+        )
         data = r.json()
-
         if data.get("code") != 0:
-            print(f"API خطأ: {data.get('msg')}")
             return None
-
-        # رابط بدون علامة مائية
         video_url = data["data"].get("play")
         if not video_url:
-            print("ما في رابط تحميل")
             return None
-
-        # تحميل الفيديو
         tmp_dir = tempfile.mkdtemp()
         file_path = os.path.join(tmp_dir, "video.mp4")
-
-        vr = requests.get(video_url, timeout=60, stream=True, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://tikwm.com/"
-        })
-        vr.raise_for_status()
-
+        vr = requests.get(video_url, timeout=60, stream=True,
+                          headers={"User-Agent": "Mozilla/5.0"})
         with open(file_path, "wb") as f:
             for chunk in vr.iter_content(chunk_size=8192):
                 f.write(chunk)
-
         if os.path.getsize(file_path) > 0:
             return file_path
-
     except Exception as e:
-        print(f"خطأ: {e}")
-
+        print(f"TikTok خطأ: {e}")
     return None
 
+# ── تحميل بقية المواقع عبر yt-dlp ────────────────────────
+
+def download_ytdlp(url: str) -> str | None:
+    tmp_dir = tempfile.mkdtemp()
+    ydl_opts = {
+        'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': True,
+        'geo_bypass': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
+        },
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            if not os.path.exists(filename):
+                for f in os.listdir(tmp_dir):
+                    full = os.path.join(tmp_dir, f)
+                    if os.path.getsize(full) > 0:
+                        return full
+            if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                return filename
+    except Exception as e:
+        print(f"yt-dlp خطأ: {e}")
+    return None
+
+# ── الدالة الرئيسية للتحميل ───────────────────────────────
+
+def download(url: str, site: str) -> str | None:
+    if site == 'tiktok':
+        result = download_tiktok(url)
+        if result:
+            return result
+    return download_ytdlp(url)
+
+
+# ── أوامر البوت ───────────────────────────────────────────
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "👋 أهلاً! أنا بوت تحميل TikTok\n\n"
-        "📌 أرسل لي رابط أي مقطع TikTok وسأرسله بدون علامة مائية ✅\n\n"
-        "يدعم:\n"
-        "• https://www.tiktok.com/@user/video/...\n"
-        "• https://vm.tiktok.com/xxxxx\n"
-        "• https://vt.tiktok.com/xxxxx"
+        "👋 أهلاً! أنا بوت تحميل الفيديوهات\n\n"
+        "📌 أرسل لي رابط من أي موقع وسأحمّله لك:\n\n"
+        "✅ TikTok\n"
+        "✅ Instagram\n"
+        "✅ X (Twitter)\n"
+        "✅ YouTube\n"
+        "✅ Facebook\n"
+        "✅ Snapchat (عام فقط)\n\n"
+        "فقط أرسل الرابط وانتظر! 🚀"
     )
     bot.reply_to(message, text)
 
@@ -76,14 +120,24 @@ def send_welcome(message):
 @bot.message_handler(func=lambda msg: True)
 def handle_message(message):
     url = message.text.strip()
+    site = detect_site(url)
 
-    if not is_tiktok_url(url):
-        bot.reply_to(message, "❌ الرابط غير صحيح!\nأرسل رابط TikTok صحيح.")
+    if not site:
+        bot.reply_to(
+            message,
+            "❌ الرابط غير مدعوم!\n\n"
+            "المواقع المدعومة:\n"
+            "• TikTok\n• Instagram\n• X (Twitter)\n• YouTube\n• Facebook\n• Snapchat"
+        )
         return
 
-    wait_msg = bot.reply_to(message, "⏳ جاري تحميل المقطع، انتظر لحظة...")
+    icons = {
+        'tiktok': '🎵', 'instagram': '📸', 'twitter': '🐦',
+        'youtube': '▶️', 'facebook': '📘', 'snapchat': '👻'
+    }
+    wait_msg = bot.reply_to(message, f"⏳ جاري تحميل المقطع من {icons.get(site,'')} انتظر...")
 
-    file_path = download_tiktok(url)
+    file_path = download(url, site)
 
     if file_path and os.path.exists(file_path):
         file_size = os.path.getsize(file_path)
@@ -98,7 +152,7 @@ def handle_message(message):
                 bot.send_video(
                     message.chat.id,
                     video,
-                    caption="✅ تم التحميل بدون علامة مائية",
+                    caption=f"{icons.get(site,'')} تم التحميل بنجاح ✅",
                     supports_streaming=True
                 )
             bot.delete_message(message.chat.id, wait_msg.message_id)
