@@ -170,4 +170,4 @@ def handle_message(message):
 
 if __name__ == '__main__':
     print("✅ البوت شغّال... اضغط Ctrl+C لإيقافه")
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
