@@ -31,7 +31,8 @@ def detect_site(url: str) -> str | None:
 
 # ── TikTok عبر tikwm.com ──────────────────────────────────
 
-def download_tiktok(url: str) -> str | None:
+def download_tiktok(url: str) -> tuple[str | None, str]:
+    """يرجع (مسار الملف, نوع المحتوى: 'video' أو 'image' أو 'images')"""
     try:
         r = requests.get(
             f"https://tikwm.com/api/?url={url}&hd=1",
@@ -40,10 +41,33 @@ def download_tiktok(url: str) -> str | None:
         )
         data = r.json()
         if data.get("code") != 0:
-            return None
-        video_url = data["data"].get("play")
+            return None, 'video'
+
+        media_data = data["data"]
+
+        # تحقق إذا كان صور (Slideshow)
+        images = media_data.get("images") or media_data.get("image_post_info")
+        if images and isinstance(images, list):
+            # حمّل الصور كقائمة
+            tmp_dir = tempfile.mkdtemp()
+            image_paths = []
+            for i, img_url in enumerate(images[:10]):  # حد أقصى 10 صور
+                img_path = os.path.join(tmp_dir, f"image_{i}.jpg")
+                vr = requests.get(img_url, timeout=30, stream=True,
+                                  headers={"User-Agent": "Mozilla/5.0"})
+                with open(img_path, "wb") as f:
+                    for chunk in vr.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                if os.path.getsize(img_path) > 0:
+                    image_paths.append(img_path)
+            if image_paths:
+                return image_paths, 'images'
+
+        # فيديو عادي
+        video_url = media_data.get("play")
         if not video_url:
-            return None
+            return None, 'video'
+
         tmp_dir = tempfile.mkdtemp()
         file_path = os.path.join(tmp_dir, "video.mp4")
         vr = requests.get(video_url, timeout=60, stream=True,
@@ -52,10 +76,11 @@ def download_tiktok(url: str) -> str | None:
             for chunk in vr.iter_content(chunk_size=8192):
                 f.write(chunk)
         if os.path.getsize(file_path) > 0:
-            return file_path
+            return file_path, 'video'
+
     except Exception as e:
         print(f"TikTok خطأ: {e}")
-    return None
+    return None, 'video'
 
 # ── Instagram عبر API مجاني ───────────────────────────────
 
@@ -148,14 +173,14 @@ def download_ytdlp(url: str) -> str | None:
 
 # ── الدالة الرئيسية ───────────────────────────────────────
 
-def download(url: str, site: str) -> str | None:
+def download(url: str, site: str) -> tuple:
     if site == 'tiktok':
-        result = download_tiktok(url)
+        result, media_type = download_tiktok(url)
         if result:
-            return result
+            return result, media_type
     if site == 'instagram':
-        return download_instagram(url)
-    return download_ytdlp(url)
+        return download_instagram(url), 'video'
+    return download_ytdlp(url), 'video'
 
 
 # ── أوامر البوت ───────────────────────────────────────────
@@ -195,26 +220,44 @@ def handle_message(message):
     }
     wait_msg = bot.reply_to(message, f"⏳ جاري التحميل من {icons.get(site,'')} انتظر...")
 
-    file_path = download(url, site)
+    file_path, media_type = download(url, site)
 
-    if file_path and os.path.exists(file_path):
-        file_size = os.path.getsize(file_path)
-        if file_size > 50 * 1024 * 1024:
-            bot.edit_message_text(
-                "❌ حجم المقطع أكبر من 50MB.",
-                chat_id=message.chat.id,
-                message_id=wait_msg.message_id
-            )
-        else:
-            with open(file_path, 'rb') as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    caption=f"{icons.get(site,'')} تم التحميل بنجاح ✅",
-                    supports_streaming=True
-                )
+    if file_path:
+        # صور متعددة (TikTok Slideshow)
+        if media_type == 'images' and isinstance(file_path, list):
+            media_group = []
+            for i, img in enumerate(file_path):
+                with open(img, 'rb') as f:
+                    media_group.append(
+                        telebot.types.InputMediaPhoto(
+                            f.read(),
+                            caption=f"{icons.get(site,'')} تم التحميل بنجاح ✅" if i == 0 else ""
+                        )
+                    )
+            bot.send_media_group(message.chat.id, media_group)
             bot.delete_message(message.chat.id, wait_msg.message_id)
-        os.remove(file_path)
+            for img in file_path:
+                os.remove(img)
+
+        # فيديو
+        elif isinstance(file_path, str) and os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            if file_size > 50 * 1024 * 1024:
+                bot.edit_message_text(
+                    "❌ حجم المقطع أكبر من 50MB.",
+                    chat_id=message.chat.id,
+                    message_id=wait_msg.message_id
+                )
+            else:
+                with open(file_path, 'rb') as video:
+                    bot.send_video(
+                        message.chat.id,
+                        video,
+                        caption=f"{icons.get(site,'')} تم التحميل بنجاح ✅",
+                        supports_streaming=True
+                    )
+                bot.delete_message(message.chat.id, wait_msg.message_id)
+            os.remove(file_path)
     else:
         bot.edit_message_text(
             "❌ فشل التحميل! تأكد من:\n"
