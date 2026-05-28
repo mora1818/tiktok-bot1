@@ -4,10 +4,10 @@
 """
 
 import telebot
-import yt_dlp
 import os
 import tempfile
 import re
+import requests
 
 BOT_TOKEN = "8863554950:AAGwwGbfBeIOorvhB5ntJ7rluMclFzSBSJ0"
 
@@ -18,43 +18,44 @@ def is_tiktok_url(url: str) -> bool:
     return bool(re.match(pattern, url.strip()))
 
 def download_tiktok(url: str) -> str | None:
-    tmp_dir = tempfile.mkdtemp()
-
-    ydl_opts = {
-        'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'quiet': True,
-        'no_warnings': True,
-        'merge_output_format': 'mp4',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-            'Referer': 'https://www.tiktok.com/',
-        },
-        'extractor_args': {
-            'tiktok': {
-                'app_name': 'trill',
-                'app_version': '34.1.2',
-                'manifest_app_version': '2023401020',
-            }
-        },
-        'cookiefile': None,
-        'geo_bypass': True,
-    }
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            # تأكد من وجود الملف
-            if not os.path.exists(filename):
-                for f in os.listdir(tmp_dir):
-                    full = os.path.join(tmp_dir, f)
-                    if os.path.getsize(full) > 0:
-                        return full
-            if os.path.exists(filename) and os.path.getsize(filename) > 0:
-                return filename
+        # جلب معلومات الفيديو
+        api_url = f"https://tikwm.com/api/?url={url}&hd=1"
+        r = requests.get(api_url, timeout=20, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://tikwm.com/"
+        })
+        data = r.json()
+
+        if data.get("code") != 0:
+            print(f"API خطأ: {data.get('msg')}")
+            return None
+
+        # رابط بدون علامة مائية
+        video_url = data["data"].get("play")
+        if not video_url:
+            print("ما في رابط تحميل")
+            return None
+
+        # تحميل الفيديو
+        tmp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(tmp_dir, "video.mp4")
+
+        vr = requests.get(video_url, timeout=60, stream=True, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://tikwm.com/"
+        })
+        vr.raise_for_status()
+
+        with open(file_path, "wb") as f:
+            for chunk in vr.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        if os.path.getsize(file_path) > 0:
+            return file_path
+
     except Exception as e:
-        print(f"yt-dlp خطأ: {e}")
+        print(f"خطأ: {e}")
 
     return None
 
@@ -88,7 +89,7 @@ def handle_message(message):
         file_size = os.path.getsize(file_path)
         if file_size > 50 * 1024 * 1024:
             bot.edit_message_text(
-                "❌ حجم المقطع أكبر من 50MB.",
+                "❌ حجم المقطع أكبر من 50MB، تيلغرام لا يدعم إرساله.",
                 chat_id=message.chat.id,
                 message_id=wait_msg.message_id
             )
